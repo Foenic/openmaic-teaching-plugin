@@ -1,85 +1,108 @@
 ---
 name: openmaic-classroom-orchestrator
-description: 课堂编排 — 管理课堂生成流水线、场景调度、内容分发、并行生成控制。涵盖 8 阶段生成、9 种场景类型、媒体/TTS 配置。
+description: 终端课堂编排 — 按 outlines 逐场景生成讲解、测验、互动，管理 lessons/ 进度。无需 OpenMAIC API。
 user-invocable: true
 ---
 
-# 课堂编排
+# 课堂编排（终端版）
 
-管理 OpenMAIC 课堂生成全流程：需求 → 大纲 → 场景内容/动作 → 媒体 → TTS → 课堂 URL。
+管理**本地课程包**的逐场景授课，替代 Web 端 8 阶段异步流水线。
 
 ## 核心规则
 
-- 先查服务器能力：`GET /api/health` → `capabilities`
-- 生成是异步流水线，保守轮询（~60s 间隔）
-- 失败时诊断服务器配置，不要立即重试
+- 产物写入 `lessons/{slug}/`，不调用 HTTP API
+- 按 `outlines.json` 的 `order` 串行推进
+- 每场景完成后更新 `lesson.yaml`
+- 失败场景可单独重生成，不阻塞后续
 
-## 生成流水线
-
-```
-需求 → 网络搜索 → 场景大纲 → 智能体生成 → 场景+动作并行 → 媒体 → TTS → 持久化
- 5%      10%       15-30%       30%          31-90%        90%    94%     98-100%
-```
-
-## SOP 阶段
-
-### 1. 准备需求
+## 终端流水线
 
 ```
-- 主题: [课程主题]
-- 受众: [学生年级/水平]
-- 语言: zh-CN | en-US | ja-JP | pt-BR | ru-RU | ar-SA
-- 场景数: [默认 8-12]
+outlines.json → 逐场景生成 scenes/*.md → 终端朗读/交互 → discussion 钩子 → 下一场景
 ```
 
-### 2. 检测服务器能力
-
-```bash
-curl -s http://localhost:3000/api/health | jq '.capabilities'
-# { "webSearch": true, "imageGeneration": false, "videoGeneration": false, "tts": true }
-```
-
-### 3. 触发生成
-
-```bash
-curl -X POST http://localhost:3000/api/generate-classroom \
-  -H "Content-Type: application/json" \
-  -d '{"requirement":"...","language":"zh-CN","agentMode":"generate"}'
-```
-
-`agentMode`：`"default"`（内置智能体）或 `"generate"`（LLM 生成定制角色）。
-
-### 4. 轮询进度
-
-```bash
-curl -s http://localhost:3000/api/generate-classroom/{jobId} | jq '.status'
-# queued → running → succeeded/failed
-```
-
-### 5. 加载课堂
+对比 Web 流水线（本插件**不需要**）：
 
 ```
-http://localhost:3000/classroom/{classroomId}
+~~POST /api/generate-classroom~~ → ~~TTS~~ → ~~媒体~~ → ~~IndexedDB~~
 ```
 
-页面自动从 IndexedDB 或服务器存储加载，并恢复智能体和媒体任务。
+## SOP
 
-## 场景类型
+### 1. 加载课程包
 
-| 类型 | 模板 | 说明 |
-|------|------|------|
-| slide | slide-content | 标准教学幻灯片 |
-| interactive | interactive-outlines | 互动内容 |
-| quiz | quiz-content + quiz-actions | 测验 |
-| code | code-content | 编程教学 |
-| diagram | diagram-content | 图表 |
-| game | game-content | 游戏化学习 |
-| simulation | simulation-content | 模拟场景 |
-| visualization3d | visualization3d-content | 3D 可视化 |
-| pbl | pbl-design + pbl-actions | 项目式学习 |
+必需文件：
+- `lesson.yaml`
+- `language-directive.md`
+- `outlines.json`
+- `team.json`
+
+### 2. 确定起点
+
+```yaml
+# lesson.yaml
+currentScene: 3   # 从 scene 3 继续
+status: teaching
+```
+
+### 3. 逐场景执行
+
+对每个 outline：
+
+| type | 读 prompt | 输出 |
+|------|-----------|------|
+| slide | `scene-teaching.md` | `scenes/scene_NN.md` |
+| interactive | `scene-teaching.md` | 含 Mermaid/引导式实验 |
+| pbl | `scene-teaching.md` | 分阶段任务清单 |
+| quiz | `quiz-generator.md` | `scenes/scene_NN_quiz.md` |
+
+**讲解流程**：
+1. 展示「要点（Slide View）」
+2. Teacher 块朗读讲解
+3. 可选 Assistant/Student 短补充
+4. 若有讨论钩子 → 提示用户可 invoke discussion skill
+5. 问用户：继续 / 提问 / 深入讨论
+
+### 4. Quiz 交互
+
+1. 逐题展示选项
+2. 等待用户输入 A/B/C/D 或文字
+3. 揭示 analysis；evaluator 可选追加反馈
+4. 写入 `lesson.yaml` → `quizResults`
+
+### 5. 进度与恢复
+
+```yaml
+currentScene: 5
+status: teaching
+```
+
+中断后从 `currentScene` 继续，已生成 `scenes/` 文件跳过（除非用户要求重写）。
+
+## 场景类型速查
+
+| type | 终端呈现 |
+|------|---------|
+| slide | 要点 + 角色讲解 + 可选 ASCII 白板 |
+| quiz | 交互问答 |
+| interactive | 分步引导 + Mermaid 模拟 |
+| pbl | 里程碑 + 检查点 |
+
+## 连贯性检查（每场景）
+
+- [ ] 非首场景：无问候/重新自我介绍
+- [ ] 引用前文用「刚才讲到…」
+- [ ] teacher 段 ~100 字，student ~50 字
+- [ ] 语言符合 language-directive
 
 ## 失败处理
 
-- 大纲失败 → `applyOutlineFallbacks` 降级
-- 场景失败 → `failedOutlines` + `retrySingleOutline`
-- 媒体失败 → 优雅降级，不阻塞课堂
+| 问题 | 处理 |
+|------|------|
+| 单场景质量差 | 重写该 `scenes/scene_NN.md` |
+| outline 整体偏差 | 回到 Phase 1 重规划 |
+| 用户中途改需求 | 更新 outlines 中后续场景 only |
+
+## 完成
+
+全部场景 → `status: completed` → 可选 summary by evaluator

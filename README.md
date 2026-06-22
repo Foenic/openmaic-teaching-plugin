@@ -1,61 +1,75 @@
-# OpenMAIC Teaching — 教学智能体插件
+# OpenMAIC Teaching — 终端教学插件
 
-将 OpenMAIC 的多智能体能力封装为可复用的教学场景技能：**定制教学团队、编排课堂生成、引导多轮讨论**。
+**独立运行**：不依赖 OpenMAIC 源码或 `localhost:3000`。智能体 + 技能在终端完成完整授课流程。
 
-> 本插件是**用户向**技能包（SOP + 最佳实践），不包含源码级调试指南。开发调试请用 `openmaic-dev-plugin`。
+> 开发/调试 OpenMAIC Web 请用 `openmaic-dev-plugin`。本插件面向**终端用户**。
+
+## 快速开始
+
+```bash
+# 安装插件
+claude plugin install ./openmaic-teaching-plugin
+
+# 初始化课程目录（可选）
+./openmaic-teaching-plugin/scripts/init-lesson.sh photosynthesis-basics "给初中生讲光合作用"
+
+# 在 Claude Code 中
+/openmaic-terminal-classroom
+# 或自然语言：「教我一堂关于量子纠缠的课，中文，高中生」
+```
 
 ## 用户旅程 → Skill 路由
 
 ```
-设计教学团队 → 配置课堂生成 → 进入课堂 → 互动讨论 → 学习评估
-     │              │            │           │            │
-     ▼              ▼            ▼           ▼            ▼
- teaching-      classroom-    openmaic    discussion-  (evaluator
- agent          orchestrator  (主技能)    facilitator  角色)
+终端授课请求
+     │
+     ▼
+openmaic-terminal-classroom（全流程入口）
+     │
+     ├─ Phase 1 规划 → prompts/outline-generator.md → outlines.json
+     ├─ Phase 2 组班 → openmaic-teaching-agent → team.json
+     ├─ Phase 3 授课 → openmaic-classroom-orchestrator → scenes/*.md
+     └─ Phase 4 讨论 → openmaic-discussion-facilitator → discussion-log.md
 ```
 
-| 用户想做什么 | 用哪个 Skill |
-|-------------|-------------|
-| 创建自定义教学智能体、编写 Persona | `openmaic-teaching-agent` |
-| 控制课堂生成参数、场景类型、媒体 | `openmaic-classroom-orchestrator` |
-| 发起和管理多智能体讨论、评估 | `openmaic-discussion-facilitator` |
-| 安装 OpenMAIC、首次生成课堂 | `openmaic`（仓库内 skills/openmaic/） |
+| 用户想做什么 | Skill / Agent |
+|-------------|---------------|
+| 完整终端授课 | `openmaic-terminal-classroom` |
+| 只设计教学团队 | `openmaic-teaching-agent` |
+| 逐场景讲解/测验 | `openmaic-classroom-orchestrator` |
+| QA / 多智能体讨论 | `openmaic-discussion-facilitator` |
+| 只生成大纲 | `lesson-planner` agent |
 
 ## 核心概念
 
-- **Agent（智能体）** — 有 persona、role、优先级、操作权限的 AI 角色
-- **Role（角色）** — teacher | assistant | evaluator | facilitator | student
-- **Director（导演）** — LangGraph 编排，决定哪个智能体下一个发言
-- **Scene（场景）** — slide | quiz | interactive | code | game 等 9 种类型
-- **Discussion（讨论）** — QA（单轮）或 Discussion（多轮多智能体）
+- **lessons/{slug}/** — 本地课程包（大纲、团队、场景脚本、讨论记录）
+- **Agent** — teacher | assistant | evaluator | facilitator | student
+- **Director** — `prompts/director.md` 规则，终端轮替决策
+- **Prompt 资产** — 从 OpenMAIC `lib/prompts/` 提取，见 `prompts/README.md`
 
-## 三条运行时路径
+## 与 OpenMAIC Web 的分工
 
-1. **课堂生成** — `POST /api/generate-classroom` → 8 阶段流水线
-2. **讲座播放** — PlaybackEngine 按预设 Scene.actions 顺序执行
-3. **实时讨论** — `POST /api/chat` → LangGraph Director → SSE 流
+| | openmaic-teaching-plugin | openmaic-dev-plugin | OpenMAIC Web |
+|--|--------------------------|---------------------|--------------|
+| 运行环境 | **终端 / Claude Code** | 源码开发 | 浏览器 |
+| 输出 | Markdown 课程包 | 代码变更 | JSON actions + UI |
+| 依赖 | 无 | 仓库源码 | Node/pnpm |
 
-## 增强角色体系
+## 目录结构
 
-| Role | 操作权限 | 用途 |
-|------|---------|------|
-| `teacher` | Slides + 白板 | 主讲教师 |
-| `assistant` | 白板 | 补充讲解 |
-| `evaluator` | 白板 | 学习评估、诊断反馈 |
-| `facilitator` | 白板 | 讨论引导、观点整合 |
-| `student` | 白板 | 参与互动 |
-
-## 与其它插件/技能的分工
-
-| | openmaic-teaching-plugin | openmaic-dev-plugin | skills/openmaic/ |
-|--|--------------------------|---------------------|------------------|
-| 受众 | **使用** OpenMAIC 教学的 AI | **开发** OpenMAIC 的 AI | OpenClaw **用户** |
-| 内容 | 教学场景 SOP、最佳实践 | 代码路径、业务规则 | 安装 SOP、一键生成 |
-| 发布 | Claude Code 插件 | Claude Code 插件 | ClawHub |
+```
+openmaic-teaching-plugin/
+├── skills/           # 4 个 user-invocable 技能
+├── agents/           # 3 个专项智能体
+├── prompts/          # 6 个核心提示词（从 lib/prompts 提取）
+├── references/       # 角色准则、Persona、目录规范
+└── scripts/          # init-lesson.sh, validate-plugin.sh
+```
 
 ## 验证
 
 ```bash
+chmod +x openmaic-teaching-plugin/scripts/*.sh
 ./openmaic-teaching-plugin/scripts/validate-plugin.sh
 ```
 

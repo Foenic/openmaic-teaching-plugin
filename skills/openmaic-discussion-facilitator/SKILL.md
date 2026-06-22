@@ -1,99 +1,124 @@
 ---
 name: openmaic-discussion-facilitator
-description: 讨论引导 — 多智能体教学讨论编排、QA 引导、LangGraph Director 控制、白板协调。SSE 流式协议、DirectorState 维护、学习评估集成。
+description: 终端讨论引导 — QA/多智能体讨论、Director 轮替、discussion-log 持久化。无需 LangGraph SSE。
 user-invocable: true
 ---
 
-# 讨论引导
+# 讨论引导（终端版）
 
-管理 OpenMAIC 多智能体教学讨论：QA/Discussion 模式、Director 编排、SSE 流式通信、白板协调。
+在终端模拟 OpenMAIC 多智能体讨论：Director 决策 → Agent 发言 → 用户介入。
 
 ## 核心规则
 
-- 讨论是实时流式生成 — 状态由客户端维护（DirectorState）
-- 后端完全无状态 — 所有上下文在请求中传递
-- 使用 LangGraph StateGraph 编排多智能体
+- 状态在 `lessons/{slug}/state.json` + `discussion-log.md`
+- 每次轮替读 `prompts/director.md` → JSON → 派 agent
+- Agent 发言遵循 `prompts/agent-system.md` + `team.json` persona
+- 无 SSE — 同步逐轮呈现
 
 ## 编排架构
 
 ```
-START → director ──(end)──→ END
-           │
-           └─(next)→ agent_generate ──→ director (loop)
+用户输入 → teaching-director → next_agent
+              ↓
+         agent 发言（Markdown 角色块）
+              ↓
+         更新 state.json + discussion-log.md
+              ↓
+         END | USER | 下一 agent
 ```
 
-### Director 决策策略
+## SOP
 
-| 场景 | 智能体数 | 方式 |
-|------|---------|------|
-| QA | 1 | 纯代码（0 LLM） |
-| Discussion turn 0 | N | 代码快路径 |
-| Discussion 后续 | N | LLM 决策 |
+### 1. 初始化讨论
 
-## SOP 阶段
-
-### 1. 配置讨论参数
-
-```typescript
-const config = {
-  agentIds: ['default-1', 'default-3', 'default-4', 'default-6'],
-  sessionType: 'discussion',
-  discussionTopic: 'AI的伦理边界',
-  triggerAgentId: 'default-6',   // 思考者先发言
-};
-
-const qaConfig = {
-  agentIds: ['default-1'],
-  sessionType: 'qa',
-};
-```
-
-### 2. 发起讨论
-
-```bash
-curl -X POST http://localhost:3000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[],"storeState":{...},"config":{...}}'
-# 响应: SSE text/event-stream
-```
-
-### 3. 监控讨论
-
-DirectorState 在每次 `done` 事件中返回，客户端累积后下次请求传入：
-
-```typescript
-interface DirectorState {
-  turnCount: number;
-  agentResponses: AgentTurnSummary[];
-  whiteboardLedger: WhiteboardActionRecord[];
+```json
+// state.json
+{
+  "turnCount": 0,
+  "agentResponses": [],
+  "discussionTopic": "AI 的伦理边界",
+  "sessionType": "discussion",
+  "triggerAgentId": "agent-student-thinker",
+  "maxTurns": 6
 }
 ```
 
-### 4. 白板协调
+会话类型：
 
-- WhiteboardLedger 记录所有智能体的白板操作
-- Director 感知白板状态（元素数、贡献者）
-- 过载警告（>5 元素）时提示整理
-- 智能体通过虚拟白板上下文避免内容重复
+| sessionType | maxTurns | 策略 |
+|-------------|----------|------|
+| qa | 1-2 | 派 teacher → USER |
+| discussion | 4-8 | Director 全规则 |
 
-### 5. 中断恢复
+### 2. Director 决策
 
-客户端保存 `directorState` → 下次请求传入 → `maxTurns = turnCount + 1` 继续编排。
+读：
+- `prompts/director.md`
+- `team.json`
+- `state.json` + 最近对话摘要
+
+输出**仅**：
+```json
+{"next_agent": "agent-teacher"}
+```
+
+快路径（无需 LLM 推理）：
+- QA + 1 agent → teacher
+- turn 0 + triggerAgentId → 派 trigger
+
+### 3. Agent 发言
+
+加载 agent 的 persona + `references/role-guidelines.md` 对应段 + `prompts/agent-system.md`。
+
+输出格式：
+```markdown
+### [王老师 · teacher]
+{口语讲解，无 markdown 格式符号}
+
+> 白板:（可选）
+```
+
+追加到 `discussion-log.md`：
+```markdown
+## Turn 2 — 王老师 (teacher)
+...
+```
+
+更新 `state.json.agentResponses`。
+
+### 4. 用户介入
+
+`next_agent: "USER"` → 暂停，显示提示，读用户输入后继续。
+
+用户消息记入 discussion-log：
+```markdown
+## [Student (Human)]
+{用户原话}
+```
+
+### 5. 结束
+
+`next_agent: "END"` 或 `turnCount >= maxTurns`：
+- 可选 facilitator 一句话总结
+- 重置或保留 state 供恢复
+
+## 白板（终端）
+
+原 WhiteboardLedger → discussion-log 中的 `> 白板:` 块累积。Director 决策时数白板块数，>5 时优先派整理/总结型 agent。
 
 ## 学习评估
 
-- **evaluator 角色**：在讨论中插入评估环节
-- **quiz 场景**：自动批改 + `/api/quiz-grade`
-- **PBL 模式**：`/api/pbl/chat` 项目阶段追踪
+- **evaluator**：讨论中插入理解检查
+- **quiz 场景**：配合 orchestrator 的 quiz 交互
+- 评估结果可写入 `lesson.yaml`
 
-## 流式事件
+## 中断恢复
 
-| 事件 | 含义 |
-|------|------|
-| agent_start | 智能体开始 |
-| text_delta | 文本增量 |
-| action | 操作执行 |
-| agent_end | 智能体结束 |
-| thinking | Director 决策中 |
-| cue_user | 等待输入 |
-| done | 本轮完成（含 directorState） |
+下次读 `state.json.turnCount`，设 `maxTurns = turnCount + N`，从 Director 继续。
+
+## 质量红线
+
+- 未解用户问题 → 禁止 END
+- 不连续同 role
+- 不重复已解释内容
+- student 必须短于 teacher

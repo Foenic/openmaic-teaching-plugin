@@ -1,7 +1,7 @@
 {
   "name": "openmaic-teaching",
-  "version": "0.1.0",
-  "description": "OpenMAIC 教学智能体生态：智能体管理、课堂编排、多智能体讨论引导。面向 OpenMAIC 用户的教学场景技能包。",
+  "version": "0.2.0",
+  "description": "OpenMAIC 终端教学插件 — 无需 Web 服务器，在 CLI 中完成课程规划、多智能体组班、逐场景讲解与讨论引导。",
   "author": {
     "name": "OpenMAIC Team"
   }
